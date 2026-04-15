@@ -1,0 +1,20 @@
+{
+    "name": "pipe3d-server",
+    "version": "1.0.0",
+    "description": "MSSQL Backend for Pipe3D PRO",
+    "main": "index.js",
+    "type": "module",
+    "scripts": {
+        "start": "node index.js",
+        "dev": "nodemon index.js"
+    },
+    "dependencies": {
+        "cors": "^2.8.5",
+        "dotenv": "^16.4.5",
+        "express": "^4.18.3",
+        "mssql": "^10.0.2"
+    },
+    "devDependencies": {
+        "nodemon": "^3.1.0"
+    }
+}

@@ -1,0 +1,10 @@
+Connecting to database...
+??? Connected.
+
+--- Projects saved on 2026-03-17 ---
+ID: 8 | Name: project2 | Created At: Tue Mar 17 2026 22:58:12 GMT+0530 (India Standard Time)
+ID: 7 | Name: project2 | Created At: Tue Mar 17 2026 22:40:12 GMT+0530 (India Standard Time)
+ID: 6 | Name: project 1 | Created At: Tue Mar 17 2026 22:11:56 GMT+0530 (India Standard Time)
+ID: 5 | Name: project 1 | Created At: Tue Mar 17 2026 22:08:27 GMT+0530 (India Standard Time)
+ID: 4 | Name: Untitled Design | Created At: Tue Mar 17 2026 22:07:22 GMT+0530 (India Standard Time)
+ID: 3 | Name: Untitled Design | Created At: Tue Mar 17 2026 22:06:07 GMT+0530 (India Standard Time)

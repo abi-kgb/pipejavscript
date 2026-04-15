@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.paper-texture {
+  pointer-events: none;
+  background-image: url("https://www.transparenttextures.com/patterns/natural-paper.png");
+  opacity: 0.05;
+  mix-blend-mode: multiply;
+}
+
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 8s linear infinite;
+}
+
+@layer base {
+  :root {
+    --bg-main: #f0f9ff;
+    --bg-secondary: #ffffff;
+    --bg-accent: #e0f2fe;
+    --text-primary: #0f172a;
+    --text-secondary: #64748b;
+    --accent-cobalt: #1d4ed8;
+    --accent-sky: #7dd3fc;
+    --border-ice: #e0f2fe;
+    --glass-bg: rgba(255, 255, 255, 0.7);
+  }
+
+  body {
+    @apply antialiased font-sans transition-colors duration-500;
+    background-color: var(--bg-main);
+    color: var(--text-primary);
+  }
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--bg-accent);
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #bae6fd;
+}
+
+@keyframes toast-in {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.animate-in {
+  animation: toast-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
