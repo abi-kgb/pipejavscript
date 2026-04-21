@@ -62,6 +62,34 @@ class SceneErrorBoundary extends Component {
   }
 }
 
+const ChainAnchorIndicator = ({ position, darkMode }) => {
+  const meshRef = useRef();
+  useFrame(({ clock }) => {
+    if (meshRef.current) {
+      const scale = 1 + Math.sin(clock.getElapsedTime() * 5) * 0.2;
+      meshRef.current.scale.set(scale, scale, scale);
+    }
+  });
+
+  return (
+    <group position={[position.x, position.y, position.z]}>
+      <mesh ref={meshRef}>
+        <sphereGeometry args={[0.2, 16, 16]} />
+        <meshBasicMaterial color="#10b981" transparent opacity={0.6} depthTest={false} />
+      </mesh>
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.3, 0.4, 32]} />
+        <meshBasicMaterial color="#10b981" transparent opacity={0.4} depthTest={false} />
+      </mesh>
+      <Html center position={[0, 0.4, 0]} pointerEvents="none">
+        <div className="bg-emerald-500 text-white text-[8px] font-black uppercase px-1.5 py-0.5 rounded shadow-lg whitespace-nowrap">
+          Chain Anchor
+        </div>
+      </Html>
+    </group>
+  );
+};
+
 // ---------------------------------------------------------
 // COMPONENT: OriginMarker
 // ---------------------------------------------------------
@@ -119,6 +147,7 @@ const SharedSceneElements = ({
   setIsGroupDragging,
   showFlow = false,
   onShowHydroStats,
+  chainAnchor = null,
 }) => {
 
 
@@ -246,7 +275,13 @@ const SharedSceneElements = ({
           onPlace={onPlaceComponent}
           viewMode={viewMode}
           darkMode={darkMode}
+          chainAnchor={chainAnchor}
         />
+      )}
+
+      {/* 🔗 CHAIN ANCHOR INDICATOR */}
+      {chainAnchor && !isCapture && (
+        <ChainAnchorIndicator position={chainAnchor.worldPos} darkMode={darkMode} />
       )}
 
       {selectedIds.length > 0 && !isCapture && (
@@ -424,7 +459,7 @@ const SelectionManager = ({ components, onBatchSelect, isDragging, isLocked }) =
 
 // (PlacementGhost and EditorControls remain the same)
 
-const PlacementGhost = ({ placingType, placingTemplate, components, onPlace, viewMode, darkMode }) => {
+const PlacementGhost = ({ placingType, placingTemplate, components, onPlace, viewMode, darkMode, chainAnchor }) => {
   const { raycaster, pointer, camera } = useThree();
   const [snap, setSnap] = useState(null);
   const pointerDownPos = useRef({ x: 0, y: 0 });
@@ -439,7 +474,7 @@ const PlacementGhost = ({ placingType, placingTemplate, components, onPlace, vie
     if (frameCount.current % 3 !== 0) return;
 
     raycaster.setFromCamera(pointer, camera);
-    const result = findSnapPoint(raycaster, components, placingType, viewMode, placingTemplate);
+    const result = findSnapPoint(raycaster, components, placingType, viewMode, placingTemplate, chainAnchor);
 
     if (placingType) {
       // Debug log every ~1 second (60fps / 3 * 20 = 40 frames)
@@ -455,6 +490,7 @@ const PlacementGhost = ({ placingType, placingTemplate, components, onPlace, vie
         result.isIntersecting !== snap.isIntersecting ||
         result.position.distanceToSquared(snap.position) > 0.0001) {
       setSnap(result);
+    }
     }
   });
 
@@ -588,7 +624,7 @@ const PlacementGhost = ({ placingType, placingTemplate, components, onPlace, vie
           <mesh>
             <sphereGeometry args={[snap.isSnappedToSocket ? 0.35 : 0.15, 16, 16]} />
             <meshBasicMaterial
-              color={snap.isIntersecting ? '#f43f5e' : (snap.isSnappedToSocket ? '#10b981' : (snap.isValid ? '#06b6d4' : '#f43f5e'))}
+              color={snap.isIntersecting ? '#f43f5e' : (snap.snapColor === 'orange' ? '#f59e0b' : snap.snapColor === 'yellow' ? '#eab308' : (snap.isSnappedToSocket ? '#10b981' : (snap.isValid ? '#06b6d4' : '#f43f5e')))}
               transparent
               opacity={snap.isSnappedToSocket || snap.isIntersecting ? 0.9 : 0.4}
               depthTest={false} 
@@ -597,8 +633,18 @@ const PlacementGhost = ({ placingType, placingTemplate, components, onPlace, vie
           {snap.isSnappedToSocket && (
             <mesh rotation={[Math.PI / 2, 0, 0]}>
               <ringGeometry args={[0.4, 0.5, 32]} />
-              <meshBasicMaterial color="#10b981" transparent opacity={0.6} depthTest={false} />
+              <meshBasicMaterial color={snap.snapColor === 'orange' ? '#f59e0b' : (snap.snapColor === 'yellow' ? '#eab308' : '#10b981')} transparent opacity={0.6} depthTest={false} />
             </mesh>
+          )}
+          {snap.warning && !isCapture && (
+            <Html center position={[0, 1.2, 0]} pointerEvents="none">
+              <div className="flex flex-col items-center gap-1">
+                <div className={`${snap.snapColor === 'orange' ? 'bg-orange-500' : 'bg-yellow-500'} text-white text-[10px] font-black px-2 py-1 rounded shadow-xl whitespace-nowrap animate-bounce`}>
+                  {snap.warning}
+                </div>
+                <div className="text-[8px] text-slate-500 font-bold bg-white/80 px-1 rounded">Shift+Click to Force</div>
+              </div>
+            </Html>
           )}
           {snap.isIntersecting && (
             <Html position={[0, 0.5, 0]} center>

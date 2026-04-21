@@ -197,7 +197,8 @@ export const findSnapPoint = (
     components,
     placingType,
     viewMode = 'iso',
-    placingTemplate = null
+    placingTemplate = null,
+    chainAnchor = null
 ) => {
     // --- PRE-PROCESSING ---
     // ASSEMBLY SUPPORT: use first part's definition as the placing type
@@ -421,6 +422,15 @@ export const findSnapPoint = (
     };
 
     for (const targetComp of components) {
+        // ── CHAIN ANCHOR PRIORITIZATION ──
+        // If we have a chain anchor, we only snap to that specific component/socket 
+        // as long as the mouse is within a reasonable distance (e.g., 5m).
+        if (chainAnchor && targetComp.id !== chainAnchor.componentId) {
+            // Check if mouse is very far from anchor. If so, allowed to snap elsewhere.
+            const distToAnchor = ray.distanceSqToPoint(chainAnchor.worldPos);
+            if (distToAnchor < 25.0) continue; // Mouse is near anchor, ignore other components
+        }
+
         const targetDef = COMPONENT_DEFINITIONS[targetComp.component_type];
         if (!targetDef) continue;
 
@@ -499,17 +509,25 @@ export const findSnapPoint = (
                         score += 5000; // Force non-colliding orientation
                     }
 
+                    const compatibility = checkConnectionCompatibility(
+                        { component_type: effectiveType, properties: placingTemplate?.properties || {} },
+                        targetComp
+                    );
+
                     if (score < globalBestScore) {
                         globalBestScore = score;
                         bestSnap = {
                             position: finalPos,
-                            rotation: candidateRot,
+                            rotation: candidateQuat,
                             isValid: true,
                             targetComponentId: targetComp.id,
                             targetSocketIndex: targetDef.sockets.indexOf(targetSocket),
                             placingSocketIndex: placingDef.sockets.indexOf(plSocket),
                             isSnappedToSocket: true,
                             isIntersecting,
+                            compatibility,
+                            snapColor: compatibility.snapColor,
+                            warning: compatibility.warning,
                             snapSocketWorldPos: worldTargetSocketPos.clone(), // actual contact point for bubble
                         };
                     }
@@ -705,4 +723,173 @@ export const calculateManualConnection = (compA, socketIdxA, compB, socketIdxB) 
         rotation: targetRotationB,
         socketWorldPos: worldSocketAPos.clone()
     };
+};
+
+// ─────────────────────────────────────────────────────────────────
+// MATERIAL COMPATIBILITY GROUPS
+// Materials in the same group can connect freely.
+// Cross-group connections get a soft warning (orange) but are still allowed.
+// ─────────────────────────────────────────────────────────────────
+const MATERIAL_GROUPS = {
+    plastic: ['pvc', 'cpvc', 'upvc', 'hdpe'],
+    ferrous: ['steel', 'ms', 'gi', 'ci', 'ss304', 'ss316'],
+    nonFerrous: ['copper', 'brass'],
+    structural: ['sq_steel', 'sq_aluminium'],
+    special: ['industrial_yellow', 'wall_concrete'],
+};
+
+/**
+ * checkConnectionCompatibility
+ * Returns { compatible: bool, diameterMatch: bool, materialMatch: bool, warning: string|null }
+ */
+export const checkConnectionCompatibility = (compA, compB) => {
+    const odA = compA.properties?.od || COMPONENT_DEFINITIONS[compA.component_type]?.defaultOD || 0.30;
+    const odB = compB.properties?.od || COMPONENT_DEFINITIONS[compB.component_type]?.defaultOD || 0.30;
+    const matA = (compA.properties?.material || 'pvc').toLowerCase();
+    const matB = (compB.properties?.material || 'pvc').toLowerCase();
+
+    // Diameter check: allow up to 20% difference
+    const odRatio = Math.min(odA, odB) / Math.max(odA, odB);
+    const diameterMatch = odRatio >= 0.8;
+
+    // Material check: same group = match, cross-group = warning
+    let groupA = null, groupB = null;
+    for (const [group, mats] of Object.entries(MATERIAL_GROUPS)) {
+        if (mats.includes(matA)) groupA = group;
+        if (mats.includes(matB)) groupB = group;
+    }
+    const materialMatch = groupA === groupB || groupA === 'special' || groupB === 'special';
+
+    let warning = null;
+    if (!diameterMatch) {
+        warning = `⚠ Diameter mismatch: Ø${odA.toFixed(2)}m ↔ Ø${odB.toFixed(2)}m — Use a Reducer`;
+    } else if (!materialMatch) {
+        warning = `⚠ Material mix: ${matA.toUpperCase()} ↔ ${matB.toUpperCase()} — Ensure gasket compatibility`;
+    }
+
+    return {
+        compatible: true, // Always allow (soft warning only)
+        diameterMatch,
+        materialMatch,
+        warning,
+        // Snap color hint for Scene3D
+        snapColor: (!diameterMatch) ? 'orange' : (!materialMatch) ? 'yellow' : 'green'
+    };
+};
+
+/**
+ * autoConnect
+ * Detects all open sockets between all components and creates connections metadata.
+ * Called after a drag/drop ends to auto-wire nearby sockets.
+ * Returns an array of { compAId, socketA, compBId, socketB, compatibility } objects.
+ */
+export const autoConnect = (allComponents, changedIds = null) => {
+    const AUTO_CONNECT_THRESHOLD = 0.3; // 30cm — tight fit for auto-connect
+    const AUTO_CONNECT_THRESHOLD_SQ = AUTO_CONNECT_THRESHOLD * AUTO_CONNECT_THRESHOLD;
+    const DIR_THRESHOLD = -0.7; // Opposing direction dot product
+
+    const getDynamicSocketPos = (component, socket) => {
+        const length = component.properties?.length || 2;
+        const radiusScale = component.properties?.radiusScale || 1;
+        const od = component.properties?.od || (0.30 * radiusScale);
+        const radiusOuter = od / 2;
+        const pos = socket.position.clone();
+        if (component.component_type === 'straight' || component.component_type === 'vertical') {
+            pos.y = (socket.position.y + 1) * (length / 2);
+        } else if (component.component_type === 'industrial-tank') {
+            const tankRadius = Math.max(radiusOuter * 2, 1.0);
+            const floorOffset = (length / 2) + (tankRadius * 1.5);
+            pos.x *= (tankRadius + 0.1);
+            pos.z *= (tankRadius + 0.1);
+            pos.y = (pos.y * (length / 2)) + floorOffset;
+        } else if (component.component_type === 'tank') {
+            const tankRadius = Math.max(radiusOuter * 2, 1.0);
+            const floorOffset = length / 2;
+            pos.x *= tankRadius;
+            pos.z *= tankRadius;
+            pos.y = (pos.y * (length / 2)) + floorOffset;
+        } else {
+            pos.multiplyScalar(radiusScale);
+        }
+        return pos;
+    };
+
+    // Build world sockets for all components
+    const allSockets = [];
+    for (const comp of allComponents) {
+        const def = COMPONENT_DEFINITIONS[comp.component_type];
+        if (!def) continue;
+
+        const pos = new THREE.Vector3(comp.position_x || 0, comp.position_y || 0, comp.position_z || 0);
+        const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+            (comp.rotation_x || 0) * Math.PI / 180,
+            (comp.rotation_y || 0) * Math.PI / 180,
+            (comp.rotation_z || 0) * Math.PI / 180
+        ));
+
+        def.sockets.forEach((socket, sIdx) => {
+            const wPos = getDynamicSocketPos(comp, socket).applyQuaternion(quat).add(pos);
+            const wDir = socket.direction.clone().applyQuaternion(quat).normalize();
+
+            // Check if this socket already has a connection
+            const isConnected = (comp.connections || []).some(c => c.localSocketIdx === sIdx);
+
+            allSockets.push({
+                compId: comp.id,
+                socketIdx: sIdx,
+                position: wPos,
+                direction: wDir,
+                isConnected,
+                comp
+            });
+        });
+    }
+
+    const newConnections = [];
+    const processedPairs = new Set();
+
+    // Only check sockets of changed components against all others (for performance)
+    const socketsToCheck = changedIds
+        ? allSockets.filter(s => changedIds.includes(s.compId))
+        : allSockets;
+
+    for (const s1 of socketsToCheck) {
+        if (s1.isConnected) continue;
+
+        for (const s2 of allSockets) {
+            if (s2.compId === s1.compId) continue;
+            if (s2.isConnected) continue;
+
+            // Skip already-processed pairs
+            const pairKey = [s1.compId, s2.compId].sort().join('|') + `_${s1.socketIdx}_${s2.socketIdx}`;
+            if (processedPairs.has(pairKey)) continue;
+
+            const distSq = s1.position.distanceToSquared(s2.position);
+            if (distSq > AUTO_CONNECT_THRESHOLD_SQ) continue;
+
+            // Check direction alignment (opposing)
+            const dot = s1.direction.dot(s2.direction);
+            if (dot > DIR_THRESHOLD) continue;
+
+            // Check compatibility
+            const compatibility = checkConnectionCompatibility(s1.comp, s2.comp);
+
+            processedPairs.add(pairKey);
+            newConnections.push({
+                compAId: s1.compId,
+                socketA: s1.socketIdx,
+                compBId: s2.compId,
+                socketB: s2.socketIdx,
+                compatibility,
+                connectionPoint: s1.position.clone().add(s2.position).multiplyScalar(0.5)
+            });
+
+            // Mark as connected to prevent double-matching
+            s1.isConnected = true;
+            s2.isConnected = true;
+            break;
+        }
+    }
+
+    return newConnections;
 };
