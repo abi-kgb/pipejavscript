@@ -518,7 +518,7 @@ export const findSnapPoint = (
                         globalBestScore = score;
                         bestSnap = {
                             position: finalPos,
-                            rotation: candidateQuat,
+                            rotation: candidateRot,
                             isValid: true,
                             targetComponentId: targetComp.id,
                             targetSocketIndex: targetDef.sockets.indexOf(targetSocket),
