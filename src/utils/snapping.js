@@ -514,6 +514,19 @@ export const findSnapPoint = (
                         targetComp
                     );
 
+                    // ── ANGLED CONNECTION DETECTION ──
+                    // If connecting two straight/vertical pipes at 90°, mark for Auto-Elbow
+                    let requiresFitting = null;
+                    const isPipeA = ['straight', 'vertical'].includes(effectiveType);
+                    const isPipeB = ['straight', 'vertical'].includes(targetComp.component_type);
+                    if (isPipeA && isPipeB) {
+                        const dot = targetDir.dot(placingDir.clone().applyQuaternion(candidateQuat));
+                        // If they are perpendicular (dot close to 0)
+                        if (Math.abs(dot) < 0.1) {
+                            requiresFitting = 'elbow';
+                        }
+                    }
+
                     if (score < globalBestScore) {
                         globalBestScore = score;
                         bestSnap = {
@@ -528,6 +541,7 @@ export const findSnapPoint = (
                             compatibility,
                             snapColor: compatibility.snapColor,
                             warning: compatibility.warning,
+                            requiresFitting,
                             snapSocketWorldPos: worldTargetSocketPos.clone(), // actual contact point for bubble
                         };
                     }
@@ -867,9 +881,11 @@ export const autoConnect = (allComponents, changedIds = null) => {
             const distSq = s1.position.distanceToSquared(s2.position);
             if (distSq > AUTO_CONNECT_THRESHOLD_SQ) continue;
 
-            // Check direction alignment (opposing)
             const dot = s1.direction.dot(s2.direction);
-            if (dot > DIR_THRESHOLD) continue;
+            const isOrthogonal = Math.abs(dot) < 0.2;
+            const isOpposing = dot < DIR_THRESHOLD;
+
+            if (!isOpposing && !isOrthogonal) continue;
 
             // Check compatibility
             const compatibility = checkConnectionCompatibility(s1.comp, s2.comp);
@@ -881,7 +897,8 @@ export const autoConnect = (allComponents, changedIds = null) => {
                 compBId: s2.compId,
                 socketB: s2.socketIdx,
                 compatibility,
-                connectionPoint: s1.position.clone().add(s2.position).multiplyScalar(0.5)
+                connectionPoint: s1.position.clone().add(s2.position).multiplyScalar(0.5),
+                requiresFitting: isOrthogonal ? 'elbow' : null
             });
 
             // Mark as connected to prevent double-matching

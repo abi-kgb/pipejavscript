@@ -488,6 +488,7 @@ const PlacementGhost = ({ placingType, placingTemplate, components, onPlace, vie
         result.isValid !== snap.isValid ||
         result.isSnappedToSocket !== snap.isSnappedToSocket ||
         result.isIntersecting !== snap.isIntersecting ||
+        result.requiresFitting !== snap.requiresFitting ||
         result.position.distanceToSquared(snap.position) > 0.0001) {
       setSnap(result);
     }
@@ -520,7 +521,8 @@ const PlacementGhost = ({ placingType, placingTemplate, components, onPlace, vie
         {}, 
         snap.targetComponentId,
         snap.targetSocketIndex,
-        snap.placingSocketIndex
+        snap.placingSocketIndex,
+        snap.requiresFitting
       );
     }
   }, [snap, onPlace]); 
@@ -639,7 +641,7 @@ const PlacementGhost = ({ placingType, placingTemplate, components, onPlace, vie
             <Html center position={[0, 1.2, 0]} pointerEvents="none">
               <div className="flex flex-col items-center gap-1">
                 <div className={`${snap.snapColor === 'orange' ? 'bg-orange-500' : 'bg-yellow-500'} text-white text-[10px] font-black px-2 py-1 rounded shadow-xl whitespace-nowrap animate-bounce`}>
-                  {snap.warning}
+                  {snap.warning || (snap.requiresFitting === 'elbow' ? 'Elbow Recommended' : null)}
                 </div>
                 <div className="text-[8px] text-slate-500 font-bold bg-white/80 px-1 rounded">Shift+Click to Force</div>
               </div>

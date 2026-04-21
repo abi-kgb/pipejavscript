@@ -971,7 +971,7 @@ function App() {
     setSelectedIds([]);
   }, []);
 
-  const handlePlaceComponent = useCallback(async (position, rotation, properties = {}, targetId = null, targetSocketIdx = null, placingSocketIdx = null) => {
+  const handlePlaceComponent = useCallback(async (position, rotation, properties = {}, targetId = null, targetSocketIdx = null, placingSocketIdx = null, requiresFitting = null) => {
     if (!placingType) return;
 
     // Debounce placement to prevent rapid-fire double components
@@ -1076,6 +1076,62 @@ function App() {
       }
 
       const componentId = `comp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      // ── AUTO-ELBOW LOGIC ──
+      if (requiresFitting === 'elbow' && targetId) {
+        const target = components.find(c => c.id === targetId);
+        if (target) {
+          const elbowId = `elbow_auto_${Date.now()}`;
+          const isTargetVertical = target.component_type === 'vertical';
+          
+          // Geometry correction: The elbow has a Radius of 1.0. 
+          // We need to offset the pipes so they don't have a gap.
+          const elbowPos = new THREE.Vector3(...position);
+          
+          const elbowComp = {
+            id: elbowId,
+            component_type: 'elbow',
+            position_x: elbowPos.x,
+            position_y: elbowPos.y,
+            position_z: elbowPos.z,
+            rotation_x: rotation[0], // Snapper already calculated the 90-degree alignment
+            rotation_y: rotation[1],
+            rotation_z: rotation[2],
+            properties: { ...finalProperties },
+            connections: [
+              { targetId, targetSocketIdx, localSocketIdx: 1 },
+              { targetId: componentId, targetSocketIdx: placingSocketIdx, localSocketIdx: 0 }
+            ],
+            isCommitted: false
+          };
+          
+          const newComponent = {
+            id: componentId,
+            component_type: placingType,
+            position_x: position[0], 
+            position_y: position[1],
+            position_z: position[2],
+            rotation_x: rotation[0],
+            rotation_y: rotation[1],
+            rotation_z: rotation[2],
+            connections: [{ targetId: elbowId, targetSocketIdx: 0, localSocketIdx: placingSocketIdx }],
+            properties: finalProperties,
+            isCommitted: false
+          };
+
+          setComponents(prev => {
+            let next = [...prev, elbowComp, newComponent];
+            next = next.map(c => (c.id === targetId ? { ...c, connections: [...(c.connections || []), { targetId: elbowId, targetSocketIdx: 1, localSocketIdx: targetSocketIdx }] } : c));
+            saveToHistory(next);
+            return next;
+          });
+          addNotification(`🛠️ Auto-inserted elbow for angled connection`, 'success');
+          // For chaining, the "last placed" is the pipe, not the elbow
+          handleFinalChain(componentId, placingType, finalProperties, position, rotation, placingSocketIdx);
+          return;
+        }
+      }
+
       const newComponent = {
         id: componentId,
         component_type: placingType,
@@ -1098,58 +1154,50 @@ function App() {
         saveToHistory(next);
         return next;
       });
+      handleFinalChain(componentId, placingType, finalProperties, position, rotation, placingSocketIdx);
     }
+  }, [placingType, placingTemplate, components, saveToHistory, handleFinalChain, decrementInventoryBatch, addNotification]);
 
-    // ── CHAIN PLACEMENT: Stay in placement mode and anchor to the new piece's open socket ──
+  const handleFinalChain = useCallback((componentId, placingType, finalProperties, position, rotation, placingSocketIdx) => {
+    // Moved chain logic to its own function to keep handlePlaceComponent clean
     const isPipeType = ['straight', 'vertical', 'cylinder'].includes(placingType);
     const isFitting = ['elbow', 'elbow-45', 't-joint', 'valve', 'reducer', 'flange', 'coupling',
       'union', 'cross', 'filter', 'cap', 'plug', 'check-valve', 'gate-valve', 'globe-valve',
       'y-strainer', 'pump', 'flow-meter', 'equal-tee', 'unequal-tee', 'y-tee', 'expansion-joint'].includes(placingType);
 
     if (isPipeType || isFitting) {
-      // Find the newly placed component's first UNCONNECTED socket for chaining
-      const newComp = assemblyId ? null : { id: componentId, component_type: placingType, connections: targetId ? [{ targetId }] : [], properties: finalProperties,
-        position_x: position[0], position_y: position[1], position_z: position[2],
-        rotation_x: rotation[0], rotation_y: rotation[1], rotation_z: rotation[2]
-      };
-
-      if (newComp) {
-        const def = COMPONENT_DEFINITIONS[placingType];
-        if (def) {
-          // Find first socket that wasn't used for the connection
-          const usedSocketIdx = placingSocketIdx;
-          const openSocket = def.sockets.findIndex((_, idx) => idx !== usedSocketIdx);
-          if (openSocket !== -1) {
-            const compQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
-              rotation[0] * Math.PI / 180, rotation[1] * Math.PI / 180, rotation[2] * Math.PI / 180
-            ));
-            const socketLocalPos = def.sockets[openSocket].position.clone();
-            if (isPipeType) {
-              socketLocalPos.y = (def.sockets[openSocket].position.y + 1) * ((finalProperties.length || 2) / 2);
-            } else {
-              socketLocalPos.multiplyScalar(finalProperties.radiusScale || 1);
-            }
-            const socketWorldPos = socketLocalPos.applyQuaternion(compQuat).add(new THREE.Vector3(...position));
-
-            setChainAnchor({
-              componentId,
-              socketIdx: openSocket,
-              worldPos: socketWorldPos,
-              componentType: placingType
-            });
-            // Stay in placement mode — don't clear placingType!
-            setSelectedIds([]);
-            return;
+      const def = COMPONENT_DEFINITIONS[placingType];
+      if (def) {
+        const usedSocketIdx = placingSocketIdx;
+        const openSocket = def.sockets.findIndex((_, idx) => idx !== usedSocketIdx);
+        if (openSocket !== -1) {
+          const compQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+            rotation[0] * Math.PI / 180, rotation[1] * Math.PI / 180, rotation[2] * Math.PI / 180
+          ));
+          const socketLocalPos = def.sockets[openSocket].position.clone();
+          if (isPipeType) {
+            socketLocalPos.y = (def.sockets[openSocket].position.y + 1) * ((finalProperties.length || 2) / 2);
+          } else {
+            socketLocalPos.multiplyScalar(finalProperties.radiusScale || 1);
           }
+          const socketWorldPos = socketLocalPos.applyQuaternion(compQuat).add(new THREE.Vector3(...position));
+
+          setChainAnchor({
+            componentId,
+            socketIdx: openSocket,
+            worldPos: socketWorldPos,
+            componentType: placingType
+          });
+          setSelectedIds([]);
+          return;
         }
       }
     }
-
     setPlacingType(null);
     setPlacingTemplate(null);
     setChainAnchor(null);
     setSelectedIds([]);
-  }, [placingType, placingTemplate, components, saveToHistory, decrementInventoryBatch]);
+  }, []);
 
 
   const handleUpdateComponent = useCallback((updatedComp) => {
@@ -1225,32 +1273,62 @@ function App() {
             ['straight', 'vertical'].includes(compB.component_type);
 
           if (bothPipes) {
-            // Auto-insert coupling at the connection point
-            const couplingId = `coupling_auto_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-            const couplingComp = {
-              id: couplingId,
-              component_type: 'coupling',
-              position_x: conn.connectionPoint.x,
-              position_y: conn.connectionPoint.y,
-              position_z: conn.connectionPoint.z,
-              rotation_x: compA.rotation_x,
-              rotation_y: compA.rotation_y,
-              rotation_z: compA.rotation_z,
-              properties: { material: compA.properties?.material || 'pvc', od: compA.properties?.od || 0.34 },
-              connections: [
-                { targetId: conn.compAId, targetSocketIdx: conn.socketA, localSocketIdx: 1 },
-                { targetId: conn.compBId, targetSocketIdx: conn.socketB, localSocketIdx: 0 }
-              ],
-              isCommitted: false
-            };
-            autoResult.push(couplingComp);
-            // Wire back-references
-            autoResult = autoResult.map(c => {
-              if (c.id === conn.compAId) return { ...c, connections: [...(c.connections || []), { targetId: couplingId, targetSocketIdx: 1, localSocketIdx: conn.socketA }] };
-              if (c.id === conn.compBId) return { ...c, connections: [...(c.connections || []), { targetId: couplingId, targetSocketIdx: 0, localSocketIdx: conn.socketB }] };
-              return c;
-            });
-            addNotification(`🔗 Coupling auto-inserted between pipes`, 'success');
+            // Check orientation: collinear (coupling) or angled (elbow)
+            const isOrthogonal = conn.requiresFitting === 'elbow';
+            
+            if (isOrthogonal) {
+              const elbowId = `elbow_auto_${Date.now()}`;
+              const elbowComp = {
+                id: elbowId,
+                component_type: 'elbow',
+                position_x: conn.connectionPoint.x,
+                position_y: conn.connectionPoint.y,
+                position_z: conn.connectionPoint.z,
+                rotation_x: compA.rotation_x, // Initial guess
+                rotation_y: compA.rotation_y,
+                rotation_z: compA.rotation_z,
+                properties: { ...compA.properties },
+                connections: [
+                  { targetId: conn.compAId, targetSocketIdx: conn.socketA, localSocketIdx: 1 },
+                  { targetId: conn.compBId, targetSocketIdx: conn.socketB, localSocketIdx: 0 }
+                ],
+                isCommitted: false
+              };
+              autoResult.push(elbowComp);
+              autoResult = autoResult.map(c => {
+                if (c.id === conn.compAId) return { ...c, connections: [...(c.connections || []), { targetId: elbowId, targetSocketIdx: 1, localSocketIdx: conn.socketA }] };
+                if (c.id === conn.compBId) return { ...c, connections: [...(c.connections || []), { targetId: elbowId, targetSocketIdx: 0, localSocketIdx: conn.socketB }] };
+                return c;
+              });
+              addNotification(`🛠️ Elbow auto-inserted for 90° turn`, 'success');
+            } else {
+              // Auto-insert coupling at the connection point
+              const couplingId = `coupling_auto_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+              const couplingComp = {
+                id: couplingId,
+                component_type: 'coupling',
+                position_x: conn.connectionPoint.x,
+                position_y: conn.connectionPoint.y,
+                position_z: conn.connectionPoint.z,
+                rotation_x: compA.rotation_x,
+                rotation_y: compA.rotation_y,
+                rotation_z: compA.rotation_z,
+                properties: { material: compA.properties?.material || 'pvc', od: compA.properties?.od || 0.34 },
+                connections: [
+                  { targetId: conn.compAId, targetSocketIdx: conn.socketA, localSocketIdx: 1 },
+                  { targetId: conn.compBId, targetSocketIdx: conn.socketB, localSocketIdx: 0 }
+                ],
+                isCommitted: false
+              };
+              autoResult.push(couplingComp);
+              // Wire back-references
+              autoResult = autoResult.map(c => {
+                if (c.id === conn.compAId) return { ...c, connections: [...(c.connections || []), { targetId: couplingId, targetSocketIdx: 1, localSocketIdx: conn.socketA }] };
+                if (c.id === conn.compBId) return { ...c, connections: [...(c.connections || []), { targetId: couplingId, targetSocketIdx: 0, localSocketIdx: conn.socketB }] };
+                return c;
+              });
+              addNotification(`🔗 Coupling auto-inserted between pipes`, 'success');
+            }
           } else {
             // Direct connection (pipe-to-fitting or fitting-to-fitting)
             autoResult = autoResult.map(c => {
