@@ -141,7 +141,7 @@ const SharedSceneElements = ({
       {isBlueprint ? (
         <>
           {/* High-contrast technical lighting: Flat and bright for clear lines */}
-          <ambientLight intensity={1.8} />
+          <ambientLight intensity={1.5} />
           <directionalLight position={[0, 10, 0]} intensity={0.5} />
         </>
       ) : (
@@ -1338,12 +1338,10 @@ const ViewportCameraControls = ({ viewMode, setResetHandler, setZoomHandlers, se
   }, [components, handleReset]);
 
   // ── Mouse Button Configuration ──────────────────────────────
-  // Use explicit ACTION constants based on camera-controls / drei defaults:
-  // 1: ROTATE, 2: TRUCK (PAN), 8: DOLLY, 16: ZOOM
   const mouseButtons = useMemo(() => {
-    if (isLocked) return { left: 0, middle: 0, right: 0, wheel: 16 };
-    if (viewMode !== 'iso') return { left: 2, middle: 2, right: 2, wheel: 16 };
-    return { left: 1, middle: 2, right: 2, wheel: 16 };
+    if (isLocked) return { left: 0, middle: 0, right: 0, wheel: 0 }; // Disable layout movement
+    if (viewMode !== 'iso') return { left: 2, middle: 2, right: 2, wheel: 32 }; // Flat views: Left click MUST PAN (Truck), not rotate. Wheel: ZOOM (32)
+    return { left: 1, middle: 2, right: 2, wheel: 32 }; // Iso View: Left click rotates. Wheel: ZOOM (32)
   }, [viewMode, isLocked]);
 
   return (
@@ -1352,7 +1350,6 @@ const ViewportCameraControls = ({ viewMode, setResetHandler, setZoomHandlers, se
         ref={controlsRef}
         makeDefault={true}
         dollyToCursor={true}
-        dollyMode="zoom"
         mouseButtons={mouseButtons}
         enableRotate={!isLocked && viewMode === 'iso'}
         enabled={true}
@@ -1379,9 +1376,8 @@ const Scene3D = forwardRef(function Scene3D({
   const zoomHandlers = useRef({});
   const captureHandlers = useRef({});
   const [isCapturingInternal, setIsCapturingInternal] = useState(false);
-  const [activeCaptureViewId, setActiveCaptureViewId] = useState(null);
+  const [activeCaptureViewId, setActiveCaptureViewId] = useState('iso'); // 🎯 Single active view for export
   const [captureStyle, setCaptureStyle] = useState('color');
-  const [captureViewsList, setCaptureViewsList] = useState(['iso', 'front', 'top', 'right', 'left', 'back', 'bottom']); // 🎯 Pre-initialize all 7 views for stability
   const [realTimeTransform, setRealTimeTransform] = useState(null);
   const [captureKey, setCaptureKey] = useState(0); 
   const [isGroupDragging, setIsGroupDragging] = useState(false); 
@@ -1480,9 +1476,11 @@ const Scene3D = forwardRef(function Scene3D({
       width: size.x.toFixed(2),
       height: size.y.toFixed(2),
       depth: size.z.toFixed(2),
-      center,
-      size,
-      totalParts: components.length
+      totalParts: components.length,
+      // 🎯 Raw objects for internal engineering math
+      box: globalBox,
+      center: center,
+      size: size
     };
   }, [components]);
 
@@ -1537,52 +1535,115 @@ const Scene3D = forwardRef(function Scene3D({
         // By using a static key in the renderer, React reuses the same Canvas instance!
         for (let idx = 0; idx < vIds.length; idx++) {
           const vid = vIds[idx];
-          setCaptureViewsList([vid]);
+          setActiveCaptureViewId(vid);
           
-          if (idx === 0) {
-             // First mount: wait for WebGL context to initialize and models to load
-             await new Promise(r => setTimeout(r, 1000)); 
+          if (idx === 0 || style !== requestedStyles[0]) {
+             // ─── CRITICAL: Wait longer for initial mount and texture loading in hidden div ───
+             await new Promise(r => setTimeout(r, 1500)); 
           } else {
-             // Subsequent frames: Canvas is ALREADY loaded. Just swapping the camera!
-             await new Promise(r => setTimeout(r, 50)); 
+             // Just need a short delay for camera to update in the existing single canvas
+             await new Promise(r => setTimeout(r, 100));
           }
+          
+          // Wait for multiple frames to ensure the new mount/camera state has been painted to the buffer
           await new Promise(r => requestAnimationFrame(r));
+          await new Promise(r => requestAnimationFrame(r));
+          await new Promise(r => requestAnimationFrame(r));
+          await new Promise(r => setTimeout(r, 200)); 
+          await new Promise(r => requestAnimationFrame(r));
+
+          // 🎯 PROACTIVE SYNC: Wait for the new camera reference to be registered after re-mounting
+          let cam = null;
+          for (let attempt = 0; attempt < 10; attempt++) {
+              cam = captureHandlersReference.current[vid];
+              if (cam) break;
+              await new Promise(r => setTimeout(r, 100)); // Poll for ref registration
+          }
+
+          if (cam && projectStats && projectStats.box) {
+             // ─── DYNAMIC "FIT-TO-VIEW" ENGINE ───
+             const config = VIEW_CONFIGS[vid];
+             if (config) {
+                if (config.defaultUp) cam.up.set(...config.defaultUp);
+                const { box: pBox, center: pCenter, size: pSize } = projectStats;
+                
+                // 1. Position camera far enough to see the whole box
+                const viewDir = new THREE.Vector3(...config.defaultPos).normalize();
+                const maxDim = Math.max(pSize.x, pSize.y, pSize.z);
+                const camDistance = maxDim * 5; // Very far to avoid near-plane clipping
+                cam.position.copy(pCenter).add(viewDir.multiplyScalar(camDistance));
+                cam.lookAt(pCenter);
+                cam.near = 0.1;
+                cam.far = camDistance * 10;
+                
+                if (cam.isOrthographicCamera) {
+                   // 2. Calculate View-Aligned Bounding Box (VABB)
+                   // We need to project the 8 corners of the Box3 into camera space to find required zoom
+                   const corners = [
+                     new THREE.Vector3(pBox.min.x, pBox.min.y, pBox.min.z),
+                     new THREE.Vector3(pBox.min.x, pBox.min.y, pBox.max.z),
+                     new THREE.Vector3(pBox.min.x, pBox.max.y, pBox.min.z),
+                     new THREE.Vector3(pBox.min.x, pBox.max.y, pBox.max.z),
+                     new THREE.Vector3(pBox.max.x, pBox.min.y, pBox.min.z),
+                     new THREE.Vector3(pBox.max.x, pBox.min.y, pBox.max.z),
+                     new THREE.Vector3(pBox.max.x, pBox.max.y, pBox.min.z),
+                     new THREE.Vector3(pBox.max.x, pBox.max.y, pBox.max.z)
+                   ];
+                   
+                   cam.updateMatrixWorld();
+                   const viewMatrix = cam.matrixWorldInverse;
+                   let minVU = Infinity, maxVU = -Infinity;
+                   let minVV = Infinity, maxVV = -Infinity;
+                   
+                   corners.forEach(c => {
+                      const v = c.clone().applyMatrix4(viewMatrix);
+                      minVU = Math.min(minVU, v.x); maxVU = Math.max(maxVU, v.x);
+                      minVV = Math.min(minVV, v.y); maxVV = Math.max(maxVV, v.y);
+                   });
+                   
+                   const worldW = maxVU - minVU;
+                   const worldH = maxVV - minVV;
+                   
+                   // 3. Dynamic Zoom: Correct for R3F normalized Ortho bounds
+                   const canvasW = 2040; const canvasH = 1200;
+                   const aspect = canvasW / canvasH;
+                   
+                   // Normalized bounds are typically [-aspect, aspect, 1, -1]
+                   // worldX * zoom = frustumX. To fit worldW: zoom = 2 * aspect / worldW
+                   const zoomX = (2 * aspect) / worldW; 
+                   const zoomY = 2 / worldH;
+                   
+                   // Use more restrictive zoom and add safety margin
+                   cam.zoom = Math.min(zoomX, zoomY) * 0.85; 
+                } else {
+                   // Perspective fitting (for any non-ortho views)
+                   const dist = maxDim * 2.5; 
+                   cam.position.copy(pCenter).add(viewDir.multiplyScalar(dist));
+                }
+                
+                cam.updateProjectionMatrix();
+                cam.updateMatrixWorld();
+             }
+           }
           
           const handler = style === 'color' ? captureHandlersColor 
                          : style === 'pencil' ? captureHandlersPencil 
                          : captureHandlersColorSketch;
           
-          const cam = captureHandlersReference.current[vid];
-          if (cam && projectStats && projectStats.size) {
-            // ─── Manual Aggressive Fitting for Capture Passes ───
-            const config = VIEW_CONFIGS[vid];
-            if (config) {
-               if (config.defaultUp) cam.up.set(...config.defaultUp);
-               const { size: pSize, center: pCenter } = projectStats;
-               if (cam.isOrthographicCamera) {
-                  const maxDim = Math.max(pSize.x, pSize.y, pSize.z);
-                  cam.position.copy(pCenter).add(new THREE.Vector3(...config.defaultPos).normalize().multiplyScalar(2000));
-                  cam.lookAt(pCenter);
-                  cam.updateMatrixWorld();
-               } else {
-                  const maxDim = Math.max(pSize.x, pSize.y, pSize.z);
-                  cam.position.copy(pCenter).add(new THREE.Vector3(...config.defaultPos).normalize().multiplyScalar(maxDim * 2.2));
-                  cam.lookAt(pCenter);
-               }
-            }
-          }
           
           if (handler.current[vid]) handler.current[vid](true, false);
           
-          // Fast Settle: Camera moved, just let R3F draw the frame
-          await new Promise(r => setTimeout(r, 150));
+          // Fast Settle: Camera moved, wait for final render
+          await new Promise(r => setTimeout(r, 500));
+          await new Promise(r => requestAnimationFrame(r));
           await new Promise(r => requestAnimationFrame(r));
           
           let canvas = null;
           let viewLabels = [];
           
           for (let i = 0; i < 5; i++) {
-             const wrapper = document.getElementById(`capture-canvas-${vid}`);
+             // Look for the static single canvas wrapper
+             const wrapper = document.getElementById(`capture-canvas`);
              if (wrapper) {
                 canvas = wrapper.querySelector('canvas');
                 if (canvas) {
@@ -1614,10 +1675,10 @@ const Scene3D = forwardRef(function Scene3D({
                         if (intersects.length > 0) {
                            const firstHit = intersects[0].object;
                            let hitComp = firstHit;
-                           while(hitComp && hitComp.name !== comp.id && hitComp.userData?.id !== comp.id) {
+                           while(hitComp && hitComp.name !== String(comp.id) && hitComp.userData?.id !== comp.id) {
                               hitComp = hitComp.parent;
                            }
-                           if (!hitComp || (hitComp.name !== comp.id && hitComp.userData?.id !== comp.id)) isOccluded = true;
+                           if (!hitComp || (hitComp.name !== String(comp.id) && hitComp.userData?.id !== comp.id)) isOccluded = true;
                         }
                         const projPos = pos.clone().project(camRef);
                         const screenX = (projPos.x + 1) / 2;
@@ -1646,7 +1707,10 @@ const Scene3D = forwardRef(function Scene3D({
             const key = style === 'color-sketch' ? 'colorsketch' : style;
             const dataUrl = canvas.toDataURL('image/png', 1.0);
             if (dataUrl && dataUrl.length > 500) {
+                console.log(`[Scene3D/Export] Captured ${vid}_${key} - Data Length: ${dataUrl.length}`);
                 images[`${vid}_${key}`] = { data: dataUrl, labels: viewLabels };
+            } else {
+                console.warn(`[Scene3D/Export] BLANK CAPTURE for ${vid}_${key}! Length: ${dataUrl?.length || 0}`);
             }
           }
         }
@@ -1867,7 +1931,7 @@ const Scene3D = forwardRef(function Scene3D({
       style={{ cursor: connectionMode ? 'crosshair' : 'auto' }}
     >
       {isWorkspaceLoading && (
-        <div className={`absolute inset-0 z-[100] flex flex-col items-center justify-center backdrop-blur-xl animate-out fade-out fill-mode-forwards duration-500 delay-300 ${darkMode ? 'bg-slate-950/90' : 'bg-white/90'}`}>
+        <div className={`absolute inset-0 z-[9999] flex flex-col items-center justify-center backdrop-blur-xl animate-out fade-out fill-mode-forwards duration-500 delay-300 ${darkMode ? 'bg-slate-950/90' : 'bg-white/90'}`}>
           <div className="animate-bounce">
             <div className={`w-16 h-16 rounded-2xl flex items-center justify-center shadow-2xl p-4 mb-4 ${darkMode ? 'bg-slate-800' : 'bg-blue-600'}`}>
               <div className="w-8 h-8 rounded-full border-4 border-white/30 border-t-white animate-spin" />
@@ -1898,35 +1962,36 @@ const Scene3D = forwardRef(function Scene3D({
           id="export-capture-container"
           style={{ 
             position: 'absolute', 
-            top: '-10000px', 
-            left: 0,
-            zIndex: -10000,
-            width: '2040px', // 🎯 High-def 1.7 ratio (fits PDF landscape perfectly)
+            top: '-10000px', // Safely move far offscreen
+            left: '-10000px',
+            zIndex: -100, // Safe layer under everything
+            opacity: 1, // Keep at 1 so browser doesn't throttle rendering loop
+            width: '2040px', 
             height: '1200px',
+            pointerEvents: 'none',
             overflow: 'hidden',
             background: '#ffffff'
           }}
           data-html2canvas-ignore="true"
         >
-          {captureViewsList.map(viewId => (
-            // 🎯 CRITICAL: Using a STATIC key ensures React REUSES the same Canvas instance!
-            // This prevents the WebGL context from being destroyed and recreated, speeding up export by 500%
-            <div key="persistent-capture-viewport" id={`capture-canvas-${viewId}`} style={{ width: '2040px', height: '1200px' }}>
-              <SceneErrorBoundary>
-                <ViewportContent
-                  viewId={viewId}
-                  config={VIEW_CONFIGS[viewId]}
+          {/* 🎯 SINGLE CANVAS APPROACH: We update props instead of unmounting to avoid WebGL context limits */}
+          <div key="capture-viewport-static" id="capture-canvas" style={{ width: '2040px', height: '1200px' }}>
+            <SceneErrorBoundary>
+              <ViewportContent
+                key="capture-viewport-content"
+                viewId={activeCaptureViewId}
+                config={VIEW_CONFIGS[activeCaptureViewId] || VIEW_CONFIGS['iso']}
                   components={taggedComponents}
                   darkMode={false}
                   isCapture={true}
                   captureStyle={captureStyle} 
                   setResetHandler={(handler, cam) => { 
                     // 🎯 Correctly store reset handler and camera reference
-                    if (captureStyle === 'color') captureHandlersColor.current[viewId] = handler;
-                    else if (captureStyle === 'pencil') captureHandlersPencil.current[viewId] = handler;
-                    else captureHandlersColorSketch.current[viewId] = handler;
+                    if (captureStyle === 'color') captureHandlersColor.current[activeCaptureViewId] = handler;
+                    else if (captureStyle === 'pencil') captureHandlersPencil.current[activeCaptureViewId] = handler;
+                    else captureHandlersColorSketch.current[activeCaptureViewId] = handler;
                     
-                    if (cam) captureHandlersReference.current[viewId] = cam;
+                    if (cam) captureHandlersReference.current[activeCaptureViewId] = cam;
                   }}
                   isLocked={false}
                   transformMode={transformMode}
@@ -1943,10 +2008,8 @@ const Scene3D = forwardRef(function Scene3D({
                   showFlow={showFlow}
                   onShowHydroStats={onShowHydroStats}
                 />
-
-              </SceneErrorBoundary>
-            </div>
-          ))}
+            </SceneErrorBoundary>
+          </div>
         </div>
       )}
     </div>
@@ -2074,6 +2137,7 @@ const ViewportContent = ({
         <PerspectiveCamera makeDefault position={config.defaultPos} fov={config.defaultFov} />
       )}
       <ViewportCameraControls
+        key={viewId} // 🎯 FORCE remount when view changes to swap CameraControls context correctly
         viewMode={viewId}
         setResetHandler={setResetHandler}
         setZoomHandlers={setZoomHandlers}

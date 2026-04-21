@@ -25,7 +25,7 @@ const MeshWithOutlines = ({ geometry, matProps, children, isBlueprint, isGhost, 
         <mesh geometry={geometry} {...props}>
           {geometry ? null : geometryChild}
           <meshBasicMaterial color={blueprintFillColor} depthWrite={true} polygonOffset polygonOffsetFactor={1.5} polygonOffsetUnits={1.5} />
-          <Edges color="#000000" threshold={60} />
+          <Edges color="#000000" threshold={40} />
         </mesh>
       </group>
     );
@@ -1057,8 +1057,8 @@ function PipeComponent({
       ))}
     </group>
 
-    {/* 🎯 Separate Marking Layer - Positioned at world center but independent of rotation/scale distortion */}
-    {(isBlueprint || isCapture) && tag && (
+    {/* 🎯 Separate Marking Layer - Hide during capture to let App.js draw vector versions instead (prevents Sobel-blur) */}
+    {!isCapture && isBlueprint && tag && (
         <Billboard 
           position={(() => {
             const bp = new THREE.Vector3(...position);
@@ -1074,7 +1074,7 @@ function PipeComponent({
           renderOrder={1500} 
         >
             {/* 🎯 Bubble background with BORDER - Dynamically pushed out to avoid clipping */}
-            <group position={[0, 0, radiusOuter + 0.16]}>
+            <group name={String(component.id)} userData={{ id: component.id }} position={[0, 0, radiusOuter + 0.16]}>
                 {/* 1. Black Border */}
                 <mesh renderOrder={1501}>
                     <circleGeometry args={[Math.max(0.18, radiusOuter * 1.05), 32]} />

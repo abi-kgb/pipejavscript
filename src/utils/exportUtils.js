@@ -41,14 +41,16 @@ export async function applyTechnicalDrawing(imageDataURL) {
                     const deltaY = Math.abs(lt - lb);
                     const deltaCenter = Math.abs(l - lr) + Math.abs(l - lt);
                     
-                    // 🎯 Lower threshold (12) and much higher sensitivity (15x) for smoother lines
+                    // 🎯 ULTRA-SENSITIVITY: Threshold (4) to catch even the faintest 3D geometric edges
                     const edgeStrength = deltaX + deltaY + deltaCenter;
                     let finalG = 255;
                     
-                    if (edgeStrength > 12) {
-                        finalG = Math.max(30, 255 - (edgeStrength * 8)); 
-                    } else if (l < 225) {
-                        finalG = Math.max(170, l); 
+                    if (edgeStrength > 4) {
+                        // Bolder edges: Multiply strength aggressively (15x) and cap darker (15)
+                        finalG = Math.max(15, 255 - (edgeStrength * 15)); 
+                    } else if (l < 240) {
+                        // Faint shading for surface depth
+                        finalG = Math.max(220, l); 
                     }
                     
                     out32[idx] = (0xFF << 24) | (finalG << 16) | (finalG << 8) | finalG;

@@ -56,10 +56,7 @@ function App() {
   });
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const [showLibrary, setShowLibrary] = useState(window.innerWidth >= 1024);
-  const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('pipe3d_user');
-    return saved ? JSON.parse(saved) : null;
-  });
+  const [user, setUser] = useState(null); // 🎯 User requested non-persistent login on refresh
   const [showInventory, setShowInventory] = useState(false);
   const [showColorDifferentiation, setShowColorDifferentiation] = useState(false);
   const [showSketchMode, setShowSketchMode] = useState(false);
@@ -529,11 +526,16 @@ function App() {
 
           if (l.isOccluded) return;
 
-          // 1. Tag circle with ID (Consistently matched to Sketch Mode)
-          doc.setFillColor(255, 255, 255); doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.05);
-          doc.circle(ox, oy, 0.65, 'FD');
-          doc.setTextColor(0, 0, 0); doc.setFontSize(2.8); doc.setFont('helvetica', 'bold');
-          doc.text(tagText, ox, oy + 0.4, { align: 'center' });
+          // 1. DYNAMIC SCALING: Tag circle mathematically bound to the physical component's outer diameter
+          // This guarantees the circle is strictly 'inside' the pipe boundaries on the final PDF
+          const componentOuterDiameter = l.width || 0.3; 
+          const radiusScale = Math.min(2.5, Math.max(0.45, componentOuterDiameter * 2.2));
+          const fSize = Math.max(1.8, radiusScale * 3.0); // 1.8pt minimum readable vector text
+
+          doc.setFillColor(255, 255, 255); doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.08);
+          doc.circle(ox, oy, radiusScale, 'FD'); 
+          doc.setTextColor(0, 0, 0); doc.setFontSize(fSize); doc.setFont('helvetica', 'bold'); 
+          doc.text(tagText, ox, oy + (radiusScale * 0.35), { align: 'center' });
 
           // 3. Dimensions below circle
           const hasLen = l.length && l.length > 0;
@@ -541,8 +543,9 @@ function App() {
           if (hasLen || l.width) {
             let dimText = `Ø${(l.width || 0).toFixed(2)}m`;
             if (isPipe && hasLen) dimText += ` × ${l.length.toFixed(2)}m`;
-            doc.setTextColor(80, 80, 80); doc.setFontSize(1.9); doc.setFont('helvetica', 'italic');
-            doc.text(dimText, ox, oy + 1.9, { align: 'center' });
+            const dimFSize = Math.max(1.6, fSize * 0.7);
+            doc.setTextColor(110, 110, 110); doc.setFontSize(dimFSize); doc.setFont('helvetica', 'italic'); 
+            doc.text(dimText, ox, oy + radiusScale + (dimFSize * 0.35), { align: 'center' }); 
           }
         });
       };
@@ -557,9 +560,75 @@ function App() {
         doc.text(`Page ${pageNum} of ${requestedViews.length + 1}`, pW - 8, pH - 2.5, { align: 'right' });
       };
 
+      // ── Tag Legend panel at the bottom of each view page ────────
+      const LEGEND_H = 30; // mm reserved at bottom of page for tag table
+      const drawTagLegend = (doc, labels) => {
+        const visibleLabels = (labels || []).filter(l => !l.isOccluded);
+        if (visibleLabels.length === 0) return;
+
+        const legendY = pH - FOOTER_H - LEGEND_H;
+
+        // Legend header bar
+        doc.setFillColor(15, 23, 42);
+        doc.rect(5, legendY, pW - 10, 5.5, 'F');
+        doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(6.5);
+        doc.text('TAG LEGEND', 8, legendY + 3.8);
+
+        // Columns layout
+        const colW = (pW - 10) / Math.min(visibleLabels.length, 6); // up to 6 cols
+        const rowH = 5.5;
+        const headerH = 5.5;
+        const bodyY = legendY + headerH;
+
+        // Column headers
+        doc.setFillColor(30, 41, 59);
+        doc.rect(5, bodyY, pW - 10, rowH, 'F');
+        doc.setTextColor(148, 163, 184); doc.setFont('helvetica', 'bold'); doc.setFontSize(5);
+
+        const cols = Math.min(visibleLabels.length, Math.floor((pW - 10) / 42));
+        const cW = (pW - 10) / cols;
+
+        for (let ci = 0; ci < cols; ci++) {
+          const cx = 5 + ci * cW;
+          doc.text('TAG', cx + 1, bodyY + 3.5);
+          doc.text('COMPONENT', cx + 7, bodyY + 3.5);
+          doc.text('DIMENSIONS', cx + 24, bodyY + 3.5);
+        }
+
+        // Rows
+        const itemsPerCol = Math.ceil(visibleLabels.length / cols);
+        visibleLabels.forEach((l, i) => {
+          const col = Math.floor(i / itemsPerCol);
+          const row = i % itemsPerCol;
+          const cx = 5 + col * cW;
+          const cy = bodyY + rowH + row * rowH;
+
+          const bg = row % 2 === 0 ? [248, 250, 252] : [241, 245, 249];
+          doc.setFillColor(...bg);
+          doc.rect(cx, cy, cW, rowH, 'F');
+
+          const tagText = String(l.tag || 'ID');
+          const compName = (l.name || l.type || '').replace(/-/g, ' ').toUpperCase();
+          const isPipe = ['straight', 'vertical', 'cylinder'].includes(l.type);
+          let dimText = `Ø${(l.width || 0).toFixed(2)}m`;
+          if (isPipe && l.length > 0) dimText += ` × ${l.length.toFixed(2)}m`;
+
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(5.5); doc.setTextColor(15, 23, 42);
+          doc.text(tagText, cx + 1, cy + 3.5);
+          doc.setFont('helvetica', 'normal'); doc.setFontSize(4.8); doc.setTextColor(51, 65, 85);
+          doc.text(compName.substring(0,12), cx + 7, cy + 3.5);
+          doc.setTextColor(100, 116, 139);
+          doc.text(dimText, cx + 24, cy + 3.5);
+        });
+
+        // Border around legend
+        doc.setDrawColor(203, 213, 225); doc.setLineWidth(0.2);
+        doc.rect(5, legendY, pW - 10, LEGEND_H - 1, 'S');
+      };
+
       // ── Render each view ────────────────────────────────────────
       const IMG_Y = HEADER_H + 3;   // top of image area
-      const IMG_H = pH - IMG_Y - FOOTER_H - 2; // height available
+      const IMG_H = pH - IMG_Y - FOOTER_H - LEGEND_H - 2; // height available (shrunk for legend)
       const IMG_W = pW - 10;        // full width minus margins
       const IMG_X = 5;              // left margin
 
@@ -600,6 +669,7 @@ function App() {
         pdf.addImage(techImg, 'PNG', finalX, finalY, finalW, finalH, undefined, 'FAST');
 
         drawL(pdf, res.labels, finalX, finalY, finalW, finalH);
+        drawTagLegend(pdf, res.labels);
         drawFooter(pdf, ++pC);
       }
 
@@ -1848,7 +1918,7 @@ function App() {
 
       {/* SAVING OVERLAY */}
       {isSaving && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-300">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-300">
           <div className="bg-white p-6 rounded-2xl shadow-2xl flex flex-col items-center gap-4">
             <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
             <span className="text-slate-800 font-black uppercase tracking-widest text-xs">Saving Project Layout...</span>
