@@ -491,7 +491,6 @@ const PlacementGhost = ({ placingType, placingTemplate, components, onPlace, vie
         result.position.distanceToSquared(snap.position) > 0.0001) {
       setSnap(result);
     }
-    }
   });
 
   const handlePointerDown = useCallback((e) => {
