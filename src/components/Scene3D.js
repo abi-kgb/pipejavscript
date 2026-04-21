@@ -542,67 +542,84 @@ const PlacementGhost = ({ placingType, placingTemplate, components, onPlace, vie
       </mesh>
 
       {snap && (
-        <group
-          position={[snap.position.x, snap.position.y, snap.position.z]}
-          rotation={[snap.rotation.x, snap.rotation.y, snap.rotation.z]}
-        >
-          {placingTemplate?.isAssembly && placingTemplate.parts ? (
-            placingTemplate.parts.map((p, i) => {
-              const assemblyQuat = new THREE.Quaternion().setFromEuler(
-                new THREE.Euler(snap.rotation.x, snap.rotation.y, snap.rotation.z)
-              );
-              const offsetVec = new THREE.Vector3(p.offset_x || 0, p.offset_y || 0, p.offset_z || 0);
-              offsetVec.applyQuaternion(assemblyQuat);
+        <group>
+          {/* --- SECONDARY FITTING GHOST --- */}
+          {snap.requiresFitting && (
+            <group position={[snap.fittingPosition.x, snap.fittingPosition.y, snap.fittingPosition.z]}>
+              <PipeComponent
+                component={{
+                  id: 'ghost-fitting',
+                  component_type: snap.requiresFitting === 'elbow' ? 'elbow' : 'coupling',
+                  position_x: 0, position_y: 0, position_z: 0,
+                  rotation_x: 0, rotation_y: 0, rotation_z: 0,
+                  properties: { material: placingTemplate?.properties?.material || 'pvc' },
+                  _isGhost: true,
+                  _isFittingGhost: true, 
+                  _isValid: true,
+                }}
+                isSelected={false}
+                isGhost={true}
+                onSelect={() => { }}
+                onUpdate={() => { }}
+                viewMode={viewMode}
+                darkMode={darkMode}
+              />
+            </group>
+          )}
 
-              const partLocalRot = new THREE.Euler(
-                (p.rotation_x || 0) * (Math.PI / 180),
-                (p.rotation_y || 0) * (Math.PI / 180),
-                (p.rotation_z || 0) * (Math.PI / 180)
-              );
-              const partLocalQuat = new THREE.Quaternion().setFromEuler(partLocalRot);
-              const partFinalQuat = assemblyQuat.clone().multiply(partLocalQuat);
-              const finalRot = new THREE.Euler().setFromQuaternion(partFinalQuat);
+          {/* --- MAIN COMPONENT GHOST --- */}
+          <group
+            position={[snap.position.x, snap.position.y, snap.position.z]}
+            rotation={[snap.rotation.x, snap.rotation.y, snap.rotation.z]}
+          >
+            {placingTemplate?.isAssembly && placingTemplate.parts ? (
+              placingTemplate.parts.map((p, i) => {
+                const assemblyQuat = new THREE.Quaternion().setFromEuler(
+                  new THREE.Euler(0, 0, 0) // No extra rotation needed inside the group
+                );
+                const offsetVec = new THREE.Vector3(p.offset_x || 0, p.offset_y || 0, p.offset_z || 0);
+                
+                const partLocalRot = new THREE.Euler(
+                  (p.rotation_x || 0) * (Math.PI / 180),
+                  (p.rotation_y || 0) * (Math.PI / 180),
+                  (p.rotation_z || 0) * (Math.PI / 180)
+                );
+                const partLocalQuat = new THREE.Quaternion().setFromEuler(partLocalRot);
+                const partFinalQuat = assemblyQuat.clone().multiply(partLocalQuat);
+                const finalRot = new THREE.Euler().setFromQuaternion(partFinalQuat);
 
-              return (
-                <group key={`ghost_ass_${i}`}>
-                  <PipeComponent
-                    component={{
-                      ...p,
-                      id: `ghost_part_${i}`,
-                      position_x: offsetVec.x,
-                      position_y: offsetVec.y,
-                      position_z: offsetVec.z,
-                      rotation_x: finalRot.x * (180 / Math.PI),
-                      rotation_y: finalRot.y * (180 / Math.PI),
-                      rotation_z: finalRot.z * (180 / Math.PI),
-                      _isGhost: true,
-                      _isValid: snap.isValid && !snap.isIntersecting,
-                      _isIntersecting: snap.isIntersecting
-                    }}
-                    isSelected={false}
-                    isGhost={true}
-                    onSelect={() => { }}
-                    onUpdate={() => { }}
-                    viewMode={viewMode}
-                    darkMode={darkMode}
-                  />
-                </group>
-              );
-            })
-          ) : (
-            <group>
+                return (
+                  <group key={`ghost_ass_${i}`} position={[offsetVec.x, offsetVec.y, offsetVec.z]} rotation={[finalRot.x, finalRot.y, finalRot.z]}>
+                    <PipeComponent
+                      component={{
+                        ...p,
+                        id: `ghost_part_${i}`,
+                        position_x: 0,
+                        position_y: 0,
+                        position_z: 0,
+                        _isGhost: true,
+                        _isValid: snap.isValid && !snap.isIntersecting,
+                        _isIntersecting: snap.isIntersecting
+                      }}
+                      isSelected={false}
+                      isGhost={true}
+                      onSelect={() => { }}
+                      onUpdate={() => { }}
+                      viewMode={viewMode}
+                      darkMode={darkMode}
+                    />
+                  </group>
+                );
+              })
+            ) : (
               <PipeComponent
                 component={{
                   id: 'ghost',
                   component_type: placingType,
-                  position_x: 0,
-                  position_y: 0,
-                  position_z: 0,
-                  rotation_x: 0,
-                  rotation_y: 0,
-                  rotation_z: 0,
+                  position_x: 0, position_y: 0, position_z: 0,
+                  rotation_x: 0, rotation_y: 0, rotation_z: 0,
                   connections: [],
-                  properties: placingTemplate?.properties || {}, 
+                  properties: placingTemplate?.properties || {},
                   _isGhost: true,
                   _isValid: snap.isValid && !snap.isIntersecting,
                   _isSnapped: snap.isSnappedToSocket,
@@ -615,8 +632,8 @@ const PlacementGhost = ({ placingType, placingTemplate, components, onPlace, vie
                 viewMode={viewMode}
                 darkMode={darkMode}
               />
-            </group>
-          )}
+            )}
+          </group>
         </group>
       )}
 

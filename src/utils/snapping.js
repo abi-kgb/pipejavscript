@@ -514,23 +514,39 @@ export const findSnapPoint = (
                         targetComp
                     );
 
-                    // ── ANGLED CONNECTION DETECTION ──
-                    // If connecting two straight/vertical pipes at 90°, mark for Auto-Elbow
+                    // ── ANGLED & COLLINEAR CONNECTION DETECTION ──
+                    // If connecting two straight/vertical pipes, we need a fitting.
                     let requiresFitting = null;
+                    let offsetDistance = 0;
                     const isPipeA = ['straight', 'vertical'].includes(effectiveType);
                     const isPipeB = ['straight', 'vertical'].includes(targetComp.component_type);
+                    
                     if (isPipeA && isPipeB) {
                         const dot = targetDir.dot(placingDir.clone().applyQuaternion(candidateQuat));
-                        // If they are perpendicular (dot close to 0)
+                        // Orthogonal (90°) -> Elbow
                         if (Math.abs(dot) < 0.1) {
                             requiresFitting = 'elbow';
+                            offsetDistance = 1.0; // Radius of our elbow component
+                        } 
+                        // Collinear (~ -1) -> Coupling
+                        else if (dot < -0.9) {
+                            requiresFitting = 'coupling';
+                            offsetDistance = 0.3; // Half-length of our coupling component
                         }
+                    }
+
+                    // Apply offset to the pipe position so it doesn't overlap the junction
+                    const modifiedPos = finalPos.clone();
+                    if (requiresFitting) {
+                        const pushDir = placingDir.clone().applyQuaternion(candidateQuat).normalize();
+                        modifiedPos.add(pushDir.multiplyScalar(offsetDistance));
                     }
 
                     if (score < globalBestScore) {
                         globalBestScore = score;
                         bestSnap = {
-                            position: finalPos,
+                            position: modifiedPos, // The OFFSET position for the pipe
+                            fittingPosition: finalPos, // The ORIGINAL junction for the fitting ghost
                             rotation: candidateRot,
                             isValid: true,
                             targetComponentId: targetComp.id,
@@ -542,7 +558,7 @@ export const findSnapPoint = (
                             snapColor: compatibility.snapColor,
                             warning: compatibility.warning,
                             requiresFitting,
-                            snapSocketWorldPos: worldTargetSocketPos.clone(), // actual contact point for bubble
+                            snapSocketWorldPos: worldTargetSocketPos.clone(),
                         };
                     }
                 }
@@ -553,7 +569,6 @@ export const findSnapPoint = (
     const finalResult = bestSnap.isValid ? bestSnap : (getFallbackSnap() || bestSnap);
     if (!finalResult.isSnappedToSocket) finalResult.isSnappedToSocket = false;
     if (finalResult.isIntersecting === undefined) finalResult.isIntersecting = false;
-    // For fallback (ground) snaps, the snap socket world pos is just the placement position
     if (!finalResult.snapSocketWorldPos) finalResult.snapSocketWorldPos = finalResult.position.clone();
     return finalResult;
 };

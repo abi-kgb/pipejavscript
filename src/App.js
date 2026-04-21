@@ -1118,25 +1118,26 @@ function App() {
 
       const componentId = `comp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       
-      // ── AUTO-ELBOW LOGIC ──
-      if (requiresFitting === 'elbow' && targetId) {
+      // ── AUTO-FITTING LOGIC (Elbows & Couplings) ──
+      if (requiresFitting && targetId) {
         const target = components.find(c => c.id === targetId);
         if (target) {
-          const elbowId = `elbow_auto_${Date.now()}`;
-          const isTargetVertical = target.component_type === 'vertical';
+          const fittingType = (requiresFitting === 'elbow' || requiresFitting === 'coupling') ? requiresFitting : 'coupling';
+          const fittingId = `${fittingType}_auto_${Date.now()}`;
           
-          // Geometry correction: The elbow has a Radius of 1.0. 
-          // We need to offset the pipes so they don't have a gap.
+          // Geometry: Offset for elbow = 1.0, coupling = 0.3
+          const offsetDistance = requiresFitting === 'elbow' ? 1.0 : 0.3;
+          
           const compQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
             rotation[0] * Math.PI / 180, rotation[1] * Math.PI / 180, rotation[2] * Math.PI / 180
           ));
-          // Offset the new pipe by 1.0 units (elbow radius) along its axis to fit into the socket
           const placingDir = new THREE.Vector3(0, 1, 0).applyQuaternion(compQuat);
-          const offsetPos = new THREE.Vector3(...position).add(placingDir.multiplyScalar(1.0));
+          // Position given to handlePlaceComponent is the ORIGINAL junction (fittingPosition)
+          const offsetPos = new THREE.Vector3(...position).add(placingDir.clone().multiplyScalar(offsetDistance));
 
-          const elbowComp = {
-            id: elbowId,
-            component_type: 'elbow',
+          const fittingComp = {
+            id: fittingId,
+            component_type: fittingType,
             position_x: position[0],
             position_y: position[1],
             position_z: position[2],
@@ -1160,19 +1161,18 @@ function App() {
             rotation_x: rotation[0],
             rotation_y: rotation[1],
             rotation_z: rotation[2],
-            connections: [{ targetId: elbowId, targetSocketIdx: 0, localSocketIdx: placingSocketIdx }],
+            connections: [{ targetId: fittingId, targetSocketIdx: 0, localSocketIdx: placingSocketIdx }],
             properties: finalProperties,
             isCommitted: false
           };
 
           setComponents(prev => {
-            let next = [...prev, elbowComp, newComponent];
-            next = next.map(c => (c.id === targetId ? { ...c, connections: [...(c.connections || []), { targetId: elbowId, targetSocketIdx: 1, localSocketIdx: targetSocketIdx }] } : c));
+            let next = [...prev, fittingComp, newComponent];
+            next = next.map(c => (c.id === targetId ? { ...c, connections: [...(c.connections || []), { targetId: fittingId, targetSocketIdx: 1, localSocketIdx: targetSocketIdx }] } : c));
             saveToHistory(next);
             return next;
           });
-          addNotification(`🛠️ Auto-inserted elbow for angled connection`, 'success');
-          // For chaining, the "last placed" is the pipe, not the elbow
+          addNotification(`🛠️ Auto-inserted ${fittingType} for pipe connection`, 'success');
           handleFinalChain(componentId, placingType, finalProperties, [offsetPos.x, offsetPos.y, offsetPos.z], rotation, placingSocketIdx);
           return;
         }
