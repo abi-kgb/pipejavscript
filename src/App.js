@@ -971,6 +971,47 @@ function App() {
     setSelectedIds([]);
   }, []);
 
+  const handleFinalChain = useCallback((componentId, placingType, finalProperties, position, rotation, placingSocketIdx) => {
+    // Moved chain logic to its own function to keep handlePlaceComponent clean
+    const isPipeType = ['straight', 'vertical', 'cylinder'].includes(placingType);
+    const isFitting = ['elbow', 'elbow-45', 't-joint', 'valve', 'reducer', 'flange', 'coupling',
+      'union', 'cross', 'filter', 'cap', 'plug', 'check-valve', 'gate-valve', 'globe-valve',
+      'y-strainer', 'pump', 'flow-meter', 'equal-tee', 'unequal-tee', 'y-tee', 'expansion-joint'].includes(placingType);
+
+    if (isPipeType || isFitting) {
+      const def = COMPONENT_DEFINITIONS[placingType];
+      if (def) {
+        const usedSocketIdx = placingSocketIdx;
+        const openSocket = def.sockets.findIndex((_, idx) => idx !== usedSocketIdx);
+        if (openSocket !== -1) {
+          const compQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+            rotation[0] * Math.PI / 180, rotation[1] * Math.PI / 180, rotation[2] * Math.PI / 180
+          ));
+          const socketLocalPos = def.sockets[openSocket].position.clone();
+          if (isPipeType) {
+            socketLocalPos.y = (def.sockets[openSocket].position.y + 1) * ((finalProperties.length || 2) / 2);
+          } else {
+            socketLocalPos.multiplyScalar(finalProperties.radiusScale || 1);
+          }
+          const socketWorldPos = socketLocalPos.applyQuaternion(compQuat).add(new THREE.Vector3(...position));
+
+          setChainAnchor({
+            componentId,
+            socketIdx: openSocket,
+            worldPos: socketWorldPos,
+            componentType: placingType
+          });
+          setSelectedIds([]);
+          return;
+        }
+      }
+    }
+    setPlacingType(null);
+    setPlacingTemplate(null);
+    setChainAnchor(null);
+    setSelectedIds([]);
+  }, []);
+
   const handlePlaceComponent = useCallback(async (position, rotation, properties = {}, targetId = null, targetSocketIdx = null, placingSocketIdx = null, requiresFitting = null) => {
     if (!placingType) return;
 
@@ -1086,15 +1127,20 @@ function App() {
           
           // Geometry correction: The elbow has a Radius of 1.0. 
           // We need to offset the pipes so they don't have a gap.
-          const elbowPos = new THREE.Vector3(...position);
-          
+          const compQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+            rotation[0] * Math.PI / 180, rotation[1] * Math.PI / 180, rotation[2] * Math.PI / 180
+          ));
+          // Offset the new pipe by 1.0 units (elbow radius) along its axis to fit into the socket
+          const placingDir = new THREE.Vector3(0, 1, 0).applyQuaternion(compQuat);
+          const offsetPos = new THREE.Vector3(...position).add(placingDir.multiplyScalar(1.0));
+
           const elbowComp = {
             id: elbowId,
             component_type: 'elbow',
-            position_x: elbowPos.x,
-            position_y: elbowPos.y,
-            position_z: elbowPos.z,
-            rotation_x: rotation[0], // Snapper already calculated the 90-degree alignment
+            position_x: position[0],
+            position_y: position[1],
+            position_z: position[2],
+            rotation_x: rotation[0],
             rotation_y: rotation[1],
             rotation_z: rotation[2],
             properties: { ...finalProperties },
@@ -1108,9 +1154,9 @@ function App() {
           const newComponent = {
             id: componentId,
             component_type: placingType,
-            position_x: position[0], 
-            position_y: position[1],
-            position_z: position[2],
+            position_x: offsetPos.x, 
+            position_y: offsetPos.y,
+            position_z: offsetPos.z,
             rotation_x: rotation[0],
             rotation_y: rotation[1],
             rotation_z: rotation[2],
@@ -1127,7 +1173,7 @@ function App() {
           });
           addNotification(`🛠️ Auto-inserted elbow for angled connection`, 'success');
           // For chaining, the "last placed" is the pipe, not the elbow
-          handleFinalChain(componentId, placingType, finalProperties, position, rotation, placingSocketIdx);
+          handleFinalChain(componentId, placingType, finalProperties, [offsetPos.x, offsetPos.y, offsetPos.z], rotation, placingSocketIdx);
           return;
         }
       }
@@ -1157,47 +1203,6 @@ function App() {
       handleFinalChain(componentId, placingType, finalProperties, position, rotation, placingSocketIdx);
     }
   }, [placingType, placingTemplate, components, saveToHistory, handleFinalChain, decrementInventoryBatch, addNotification]);
-
-  const handleFinalChain = useCallback((componentId, placingType, finalProperties, position, rotation, placingSocketIdx) => {
-    // Moved chain logic to its own function to keep handlePlaceComponent clean
-    const isPipeType = ['straight', 'vertical', 'cylinder'].includes(placingType);
-    const isFitting = ['elbow', 'elbow-45', 't-joint', 'valve', 'reducer', 'flange', 'coupling',
-      'union', 'cross', 'filter', 'cap', 'plug', 'check-valve', 'gate-valve', 'globe-valve',
-      'y-strainer', 'pump', 'flow-meter', 'equal-tee', 'unequal-tee', 'y-tee', 'expansion-joint'].includes(placingType);
-
-    if (isPipeType || isFitting) {
-      const def = COMPONENT_DEFINITIONS[placingType];
-      if (def) {
-        const usedSocketIdx = placingSocketIdx;
-        const openSocket = def.sockets.findIndex((_, idx) => idx !== usedSocketIdx);
-        if (openSocket !== -1) {
-          const compQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
-            rotation[0] * Math.PI / 180, rotation[1] * Math.PI / 180, rotation[2] * Math.PI / 180
-          ));
-          const socketLocalPos = def.sockets[openSocket].position.clone();
-          if (isPipeType) {
-            socketLocalPos.y = (def.sockets[openSocket].position.y + 1) * ((finalProperties.length || 2) / 2);
-          } else {
-            socketLocalPos.multiplyScalar(finalProperties.radiusScale || 1);
-          }
-          const socketWorldPos = socketLocalPos.applyQuaternion(compQuat).add(new THREE.Vector3(...position));
-
-          setChainAnchor({
-            componentId,
-            socketIdx: openSocket,
-            worldPos: socketWorldPos,
-            componentType: placingType
-          });
-          setSelectedIds([]);
-          return;
-        }
-      }
-    }
-    setPlacingType(null);
-    setPlacingTemplate(null);
-    setChainAnchor(null);
-    setSelectedIds([]);
-  }, []);
 
 
   const handleUpdateComponent = useCallback((updatedComp) => {
